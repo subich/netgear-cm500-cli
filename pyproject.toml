@@ -1,5 +1,5 @@
 [project]
-name = "cm500-status"
+name = "netgear-cm500-cli"
 version = "0.1.0"
 description = "Fetch and summarize status from a NETGEAR CM500 cable modem."
 authors = [
@@ -9,7 +9,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-cm500-status = "cm500_status.cli:main"
+netgear-cm500-cli = "netgear_cm500_cli.cli:main"
 
 [dependency-groups]
 dev = [
@@ -34,5 +34,5 @@ select = ["E", "F", "I", "UP", "B", "C901", "PLR"]
 "tests/*" = ["PLR2004", "E501"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=cm500_status --cov-report=term-missing --cov-fail-under=80"
+addopts = "--cov=netgear_cm500_cli --cov-report=term-missing --cov-fail-under=80"
 testpaths = ["tests"]

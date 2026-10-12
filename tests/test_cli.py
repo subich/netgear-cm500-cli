@@ -6,9 +6,9 @@ import json
 
 import pytest
 
-from cm500_status import cli
-from cm500_status.color import Palette
-from cm500_status.modem import (
+from netgear_cm500_cli import cli
+from netgear_cm500_cli.color import Palette
+from netgear_cm500_cli.modem import (
     DownstreamChannel,
     EventLogEntry,
     GeneralStatus,

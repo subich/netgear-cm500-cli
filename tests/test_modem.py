@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from cm500_status import modem
-from cm500_status.modem import ModemError, parse_status
+from netgear_cm500_cli import modem
+from netgear_cm500_cli.modem import ModemError, parse_status
 
 # Abridged but structurally faithful copy of the modem's status page. Includes
 # the commented example assignments the parser must skip and the trailing "|".

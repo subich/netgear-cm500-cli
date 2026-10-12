@@ -11,8 +11,8 @@ import dataclasses
 
 import pytest
 
-from cm500_status import modem
-from cm500_status.modem import ModemError, Severity, parse_event_log
+from netgear_cm500_cli import modem
+from netgear_cm500_cli.modem import ModemError, Severity, parse_event_log
 
 # Two rows, newest first, matching the modem's escaped-XML embedding.
 _SAMPLE_HTML = r"""

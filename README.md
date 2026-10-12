@@ -1,4 +1,4 @@
-# cm500-status
+# netgear-cm500-cli
 
 Fetch and summarize status from a NETGEAR CM500 cable modem.
 
@@ -25,13 +25,13 @@ the process list.
 
 ```sh
 # connection summary and channel tables (default subcommand)
-uv run cm500-status
+uv run netgear-cm500-cli
 
 # most recent event-log entries
-uv run cm500-status events
+uv run netgear-cm500-cli events
 
 # only errors from the event log, as JSON
-uv run cm500-status events --min-severity error --json
+uv run netgear-cm500-cli events --min-severity error --json
 ```
 
 ### Subcommands
