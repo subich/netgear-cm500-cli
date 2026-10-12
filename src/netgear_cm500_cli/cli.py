@@ -1,4 +1,4 @@
-"""Command-line interface for the cm500-status tool.
+"""Command-line interface for the netgear-cm500-cli tool.
 
 Fetches status or the event log from a NETGEAR CM500 modem and renders it as a
 human-readable summary or JSON. Credentials are taken from the environment or
@@ -24,8 +24,8 @@ import os
 import sys
 from collections.abc import Sequence
 
-from cm500_status.color import Palette, palette_for
-from cm500_status.modem import (
+from netgear_cm500_cli.color import Palette, palette_for
+from netgear_cm500_cli.modem import (
     DEFAULT_HOST,
     DEFAULT_USER,
     DownstreamChannel,
@@ -58,7 +58,7 @@ _SEVERITY_CHOICES = [member.label.lower() for member in Severity]
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="cm500-status",
+        prog="netgear-cm500-cli",
         description="Fetch status or the event log from a NETGEAR CM500 cable modem.",
     )
     _add_common_arguments(parser)
@@ -313,7 +313,7 @@ def _run_events(args: argparse.Namespace, password: str, palette: Palette) -> in
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Entry point for the ``cm500-status`` console script."""
+    """Entry point for the ``netgear-cm500-cli`` console script."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 

@@ -6,7 +6,7 @@ import io
 
 import pytest
 
-from cm500_status.color import Palette, palette_for, should_colorize
+from netgear_cm500_cli.color import Palette, palette_for, should_colorize
 
 
 def test_palette_disabled_returns_text_unchanged() -> None:

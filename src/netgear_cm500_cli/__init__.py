@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from cm500_status.cli import main
-from cm500_status.modem import (
+from netgear_cm500_cli.cli import main
+from netgear_cm500_cli.modem import (
     DownstreamChannel,
     EventLogEntry,
     GeneralStatus,
