@@ -1,0 +1,38 @@
+[project]
+name = "cm500-status"
+version = "0.1.0"
+description = "Fetch and summarize status from a NETGEAR CM500 cable modem."
+authors = [
+    { name = "Stefan Subich", email = "ssubich@clearsense.com" }
+]
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+cm500-status = "cm500_status.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C901", "PLR"]
+
+# Asserting against literal expected values is idiomatic in tests, and the
+# modem HTML fixture contains unsplittable long data lines.
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PLR2004", "E501"]
+
+[tool.pytest.ini_options]
+addopts = "--cov=cm500_status --cov-report=term-missing --cov-fail-under=80"
+testpaths = ["tests"]
