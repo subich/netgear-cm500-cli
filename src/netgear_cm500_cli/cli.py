@@ -1,9 +1,9 @@
 """Command-line interface for the netgear-cm500-cli tool.
 
-Fetches status or the event log from a NETGEAR CM500 modem and renders it as a
-human-readable summary or JSON. Credentials are taken from the environment or
-an interactive prompt; the password is never accepted as a command-line
-argument so it does not leak into shell history or the process list.
+Fetches read-only status and event information from a NETGEAR CM500 modem and
+renders it as a human-readable summary or JSON. Credentials are taken from the
+environment or an interactive prompt; the password is never accepted as a
+command-line argument so it does not leak into shell history or the process list.
 
 Text output is colorized to highlight out-of-spec signal values and severe
 events. Color is emitted only to an interactive terminal and is suppressed for
@@ -12,6 +12,8 @@ JSON, pipes, ``--no-color``, or the ``NO_COLOR`` convention.
 Subcommands:
     status  connection summary and downstream/upstream channel tables
     events  most recent entries from the DOCSIS event log
+    gateway gateway, LAN, and wireless status
+    voice   voice/MTA status
 """
 
 from __future__ import annotations
@@ -34,12 +36,16 @@ from netgear_cm500_cli.modem import (
     DEFAULT_USER,
     DownstreamChannel,
     EventLogEntry,
+    GatewayStatus,
     ModemError,
     ModemStatus,
     Severity,
     UpstreamChannel,
+    VoiceStatus,
     get_event_log,
+    get_gateway_status,
     get_status,
+    get_voice_status,
 )
 
 _PASSWORD_ENV_VAR = "CM500_PASS"
@@ -71,7 +77,9 @@ class CredentialError(Exception):
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="netgear-cm500-cli",
-        description="Fetch status or the event log from a NETGEAR CM500 cable modem.",
+        description=(
+            "Fetch read-only status and event information from a NETGEAR CM500."
+        ),
     )
     _add_common_arguments(parser, subparser_defaults=False)
 
@@ -105,6 +113,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "(e.g. 'error' hides notices and informational events)"
         ),
     )
+
+    gateway_parser = subparsers.add_parser(
+        "gateway", help="gateway, LAN, and wireless status"
+    )
+    _add_common_arguments(gateway_parser, subparser_defaults=True)
+
+    voice_parser = subparsers.add_parser("voice", help="voice/MTA status")
+    _add_common_arguments(voice_parser, subparser_defaults=True)
 
     return parser
 
@@ -502,6 +518,134 @@ def _run_events(
     return 0
 
 
+def _render_gateway_status_text(status: GatewayStatus, host: str) -> str:
+    lines = [f"=== NETGEAR CM500 gateway status @ {host} ==="]
+    sections = (
+        (
+            "Modem",
+            (
+                ("Hardware version", status.hardware_version),
+                ("Firmware version", status.firmware_version),
+                ("Serial number", status.serial_number),
+                ("CM certificate", status.cm_certificate),
+            ),
+        ),
+        (
+            "Cable connection",
+            (
+                ("MAC address", status.cable_mac),
+                ("IP address/mask", status.cable_ip_mask),
+                ("Default gateway", status.cable_gateway),
+                ("DNS servers", status.cable_dns),
+                ("Network access", status.network_access),
+            ),
+        ),
+        (
+            "Internet port",
+            (
+                ("MAC address", status.internet_mac),
+                ("IP address/mask", status.internet_ip_mask),
+                ("DHCP", status.internet_dhcp),
+                ("Default gateway", status.internet_gateway),
+                ("DNS servers", status.internet_dns),
+            ),
+        ),
+        (
+            "LAN",
+            (
+                ("MAC address", status.lan_mac),
+                ("IP address/mask", status.lan_ip_mask),
+                ("DHCP", status.lan_dhcp),
+            ),
+        ),
+        (
+            "Wireless 2.4 GHz",
+            (
+                ("Region", status.wireless_24_region),
+                ("Channel", status.wireless_24_channel),
+                ("Mode", status.wireless_24_mode),
+                ("Access point", status.wireless_24_access_point),
+                ("Broadcast name", status.wireless_24_broadcast_name),
+                ("Wireless isolation", status.wireless_24_isolation),
+            ),
+        ),
+        (
+            "Wireless 5 GHz",
+            (
+                ("Region", status.wireless_5_region),
+                ("Channel", status.wireless_5_channel),
+                ("Mode", status.wireless_5_mode),
+                ("Access point", status.wireless_5_access_point),
+                ("Broadcast name", status.wireless_5_broadcast_name),
+                ("Wireless isolation", status.wireless_5_isolation),
+            ),
+        ),
+        (
+            "System",
+            (
+                ("Current system time", status.current_system_time),
+                ("System uptime", status.system_uptime),
+            ),
+        ),
+    )
+    for title, fields in sections:
+        lines.extend(("", f"--- {title} ---"))
+        lines.extend(f"{label:<22}: {value}" for label, value in fields)
+    return "\n".join(lines)
+
+
+def _render_voice_status_text(status: VoiceStatus, host: str) -> str:
+    def display(value: str | None) -> str:
+        return value if value is not None else "Unavailable"
+
+    lines = [
+        f"=== NETGEAR CM500 voice status @ {host} ===",
+        f"{'Line 1':<22}: {display(status.line_1_status)}",
+        f"{'Line 2':<22}: {display(status.line_2_status)}",
+        f"{'MTA MAC address':<22}: {display(status.mta_mac)}",
+        f"{'MTA IP address':<22}: {display(status.mta_ip)}",
+        f"{'MTA FQDN':<22}: {display(status.mta_fqdn)}",
+        f"{'Telephony signaling':<22}: {display(status.telephony_signaling)}",
+    ]
+    return "\n".join(lines)
+
+
+def _run_gateway(args: argparse.Namespace, user: str, password: str) -> int:
+    if args.monitor:
+        return _run_monitor_loop(
+            lambda: _render_gateway_status_text(
+                get_gateway_status(args.host, user, password), args.host
+            ),
+            args.interval,
+            sys.stdout,
+        )
+
+    status = get_gateway_status(args.host, user, password)
+    if args.json:
+        print(json.dumps(dataclasses.asdict(status), indent=2))
+    else:
+        print(_render_gateway_status_text(status, args.host))
+    return 0
+
+
+def _run_voice(args: argparse.Namespace, user: str, password: str) -> int:
+    if args.monitor:
+        return _run_monitor_loop(
+            lambda: _render_voice_status_text(
+                get_voice_status(args.host, user, password), args.host
+            ),
+            args.interval,
+            sys.stdout,
+        )
+
+    status = get_voice_status(args.host, user, password)
+    if args.json:
+        print(json.dumps(dataclasses.asdict(status), indent=2))
+    else:
+        print(_render_voice_status_text(status, args.host))
+    return 0
+
+
 def _run_monitor_loop(
     poll_and_render: Callable[[], str], interval: float, output: TextIO
 ) -> int:
@@ -540,6 +684,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         user, password = _resolve_credentials(args)
         if args.command == "events":
             return _run_events(args, user, password, palette)
+        if args.command == "gateway":
+            return _run_gateway(args, user, password)
+        if args.command == "voice":
+            return _run_voice(args, user, password)
         return _run_status(args, user, password, palette)
     except (CredentialError, ModemError) as exc:
         print(f"error: {exc}", file=sys.stderr)

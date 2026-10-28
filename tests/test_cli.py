@@ -14,11 +14,13 @@ from netgear_cm500_cli.color import Palette
 from netgear_cm500_cli.modem import (
     DownstreamChannel,
     EventLogEntry,
+    GatewayStatus,
     GeneralStatus,
     ModemError,
     ModemStatus,
     Severity,
     UpstreamChannel,
+    VoiceStatus,
 )
 
 # Palettes with color forced on/off so render tests are deterministic
@@ -63,6 +65,49 @@ _STATUS = ModemStatus(
             power_dbmv="46.3",
         )
     ],
+)
+
+_GATEWAY_STATUS = GatewayStatus(
+    hardware_version="hardware",
+    firmware_version="firmware",
+    serial_number="serial",
+    cm_certificate="installed",
+    cable_mac="cable-mac",
+    cable_ip_mask="cable-ip/mask",
+    cable_gateway="cable-gateway",
+    cable_dns="cable-dns",
+    network_access="allowed",
+    internet_mac="internet-mac",
+    internet_ip_mask="internet-ip/mask",
+    internet_dhcp="DHCP",
+    internet_gateway="internet-gateway",
+    internet_dns="internet-dns",
+    lan_mac="lan-mac",
+    lan_ip_mask="lan-ip/mask",
+    lan_dhcp="LAN DHCP",
+    wireless_24_region="region",
+    wireless_24_channel="channel",
+    wireless_24_mode="mode",
+    wireless_24_access_point="enabled",
+    wireless_24_broadcast_name="ssid",
+    wireless_24_isolation="off",
+    wireless_5_region="region5",
+    wireless_5_channel="channel5",
+    wireless_5_mode="mode5",
+    wireless_5_access_point="enabled5",
+    wireless_5_broadcast_name="ssid5",
+    wireless_5_isolation="off5",
+    system_uptime="uptime",
+    current_system_time="current-time",
+)
+
+_VOICE_STATUS = VoiceStatus(
+    line_1_status="Connected",
+    line_2_status="Disconnected",
+    mta_mac="mta-mac",
+    mta_ip="mta-ip",
+    mta_fqdn="mta-fqdn",
+    telephony_signaling="SIP",
 )
 
 _EVENTS = [
@@ -161,6 +206,52 @@ def test_json_output_is_valid_and_structured(
     assert payload["general"]["connectivity_state"] == "OK"
     assert payload["downstream"][0]["modulation"] == "QAM256"
     assert payload["upstream"][0]["channel_type"] == "ATDMA"
+
+
+def test_gateway_command_text_output(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    _env_password: None,
+) -> None:
+    monkeypatch.setattr(cli, "get_gateway_status", lambda *a, **k: _GATEWAY_STATUS)
+
+    assert cli.main(["gateway"]) == 0
+
+    out = capsys.readouterr().out
+    assert "gateway status" in out
+    assert "Wireless 2.4 GHz" in out
+    assert "Wireless 5 GHz" in out
+    assert "ssid5" in out
+
+
+def test_voice_command_json_output(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    _env_password: None,
+) -> None:
+    monkeypatch.setattr(cli, "get_voice_status", lambda *a, **k: _VOICE_STATUS)
+
+    assert cli.main(["voice", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["line_1_status"] == "Connected"
+    assert payload["line_2_status"] == "Disconnected"
+    assert payload["telephony_signaling"] == "SIP"
+
+
+def test_voice_text_output_marks_empty_fields_unavailable() -> None:
+    status = VoiceStatus(
+        line_1_status=None,
+        line_2_status=None,
+        mta_mac=None,
+        mta_ip=None,
+        mta_fqdn=None,
+        telephony_signaling=None,
+    )
+
+    rendered = cli._render_voice_status_text(status, "192.168.100.1")
+
+    assert rendered.count("Unavailable") == 6
 
 
 def test_modem_error_reports_to_stderr_and_exits_nonzero(

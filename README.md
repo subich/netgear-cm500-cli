@@ -38,6 +38,12 @@ uv run netgear-cm500-cli status
 # most recent event-log entries
 uv run netgear-cm500-cli events
 
+# gateway, LAN, and wireless status
+uv run netgear-cm500-cli gateway
+
+# voice/MTA status
+uv run netgear-cm500-cli voice
+
 # resolve credentials from a 1Password item (optional vault)
 uv run netgear-cm500-cli status --op-item cm500-admin --op-vault Home
 
@@ -57,6 +63,9 @@ uv run netgear-cm500-cli events --min-severity error --json
   - `-s, --min-severity LEVEL` — show only events at this severity or worse
     (`emergency`, `alert`, `critical`, `error`, `warning`, `notice`,
     `information`, `debug`).
+- `gateway` — modem identification, cable and Internet port details, LAN
+  status, wireless 2.4/5 GHz status, and system time/uptime.
+- `voice` — voice line states and MTA provisioning details.
 - `--monitor` — poll continuously and refresh the full current view.
 - `--interval SECONDS` — monitor poll interval (default: `5`); must be a
   finite number greater than zero.
