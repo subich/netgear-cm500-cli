@@ -23,6 +23,11 @@ The modem requires admin credentials. Supply the password through the
 accepted as a command-line argument, so it does not leak into shell history or
 the process list.
 
+You can also opt in to resolving both username and password from one
+1Password item via `op item get`. This requires the
+[1Password CLI](https://developer.1password.com/docs/cli/) (`op`) to be
+installed and signed in.
+
 ```sh
 # available subcommands and options (no modem connection)
 uv run netgear-cm500-cli
@@ -32,6 +37,9 @@ uv run netgear-cm500-cli status
 
 # most recent event-log entries
 uv run netgear-cm500-cli events
+
+# resolve credentials from a 1Password item (optional vault)
+uv run netgear-cm500-cli status --op-item cm500-admin --op-vault Home
 
 # full-screen monitor mode (refresh every 5 seconds by default)
 uv run netgear-cm500-cli status --monitor
@@ -68,6 +76,14 @@ A subcommand is required to fetch data. Without one, the tool displays help.
 | `--no-color` | color on an interactive terminal | `NO_COLOR` |
 | `--monitor` | one-shot fetch | — |
 | `--interval` | `5` seconds | — |
+| `--op-item` | disabled | `CM500_OP_ITEM` |
+| `--op-vault` | unset | `CM500_OP_VAULT` |
+
+When `--op-item`/`CM500_OP_ITEM` is set, credentials are resolved from that
+single 1Password item (`username` + `password` fields) and override
+`--user`/`CM500_USER` and `CM500_PASS` entirely. If 1Password resolution fails,
+the command exits with an error and does not fall back to environment or
+interactive password entry. `--op-vault` requires `--op-item`.
 
 Color is emitted only to an interactive terminal. It is suppressed for JSON,
 pipes, `--no-color`, and the [`NO_COLOR`](https://no-color.org) convention.
@@ -76,6 +92,9 @@ In monitor mode, interactive terminals clear and redraw each successful poll.
 When redirected to a file/pipe, snapshots are appended without terminal
 control escape sequences and flushed after each refresh. Press `Ctrl-C` to
 stop monitor mode.
+
+Security note: the resolved password is captured only in-process memory from
+`op` stdout, with no temp files or credential logging.
 
 ## Development
 

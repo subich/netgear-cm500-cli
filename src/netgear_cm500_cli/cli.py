@@ -22,6 +22,7 @@ import getpass
 import json
 import math
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -44,8 +45,11 @@ from netgear_cm500_cli.modem import (
 _PASSWORD_ENV_VAR = "CM500_PASS"
 _HOST_ENV_VAR = "CM500_HOST"
 _USER_ENV_VAR = "CM500_USER"
+_OP_ITEM_ENV_VAR = "CM500_OP_ITEM"
+_OP_VAULT_ENV_VAR = "CM500_OP_VAULT"
 _DEFAULT_EVENT_LIMIT = 20
 _DEFAULT_MONITOR_INTERVAL = 5.0
+_OP_TIMEOUT_SECONDS = 60
 
 # Downstream signal spec limits (dBmV / dB). Values outside these are typical
 # fault indicators and get highlighted; see the CableLabs DOCSIS guidance.
@@ -60,24 +64,28 @@ _DS_SNR_WARN_MIN = 30.0
 _SEVERITY_CHOICES = [member.label.lower() for member in Severity]
 
 
+class CredentialError(Exception):
+    """Raised when credentials cannot be resolved safely."""
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="netgear-cm500-cli",
         description="Fetch status or the event log from a NETGEAR CM500 cable modem.",
     )
-    _add_common_arguments(parser)
+    _add_common_arguments(parser, subparser_defaults=False)
 
     subparsers = parser.add_subparsers(dest="command")
 
     status_parser = subparsers.add_parser(
         "status", help="connection summary and channel tables"
     )
-    _add_common_arguments(status_parser)
+    _add_common_arguments(status_parser, subparser_defaults=True)
 
     events_parser = subparsers.add_parser(
         "events", help="most recent entries from the DOCSIS event log"
     )
-    _add_common_arguments(events_parser)
+    _add_common_arguments(events_parser, subparser_defaults=True)
     events_parser.add_argument(
         "-n",
         "--limit",
@@ -113,7 +121,9 @@ def _monitor_interval(value: str) -> float:
     return interval
 
 
-def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_common_arguments(
+    parser: argparse.ArgumentParser, *, subparser_defaults: bool
+) -> None:
     """Attach the shared connection flags to a parser or subparser.
 
     Repeating them on each subparser lets the flags appear either before or
@@ -154,6 +164,43 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
             f"(default: {_DEFAULT_MONITOR_INTERVAL:g})"
         ),
     )
+    op_item_default: str | None = (
+        argparse.SUPPRESS
+        if subparser_defaults
+        else _read_optional_env_value(_OP_ITEM_ENV_VAR)
+    )
+    op_vault_default: str | None = (
+        argparse.SUPPRESS
+        if subparser_defaults
+        else _read_optional_env_value(_OP_VAULT_ENV_VAR)
+    )
+    parser.add_argument(
+        "--op-item",
+        default=op_item_default,
+        metavar="ITEM",
+        type=_op_item_value,
+        help=(
+            "resolve username and password from 1Password item ITEM "
+            f"(or ${_OP_ITEM_ENV_VAR})"
+        ),
+    )
+    parser.add_argument(
+        "--op-vault",
+        default=op_vault_default,
+        metavar="VAULT",
+        help=f"1Password vault for --op-item (or ${_OP_VAULT_ENV_VAR})",
+    )
+
+
+def _op_item_value(value: str) -> str:
+    if value == "":
+        raise argparse.ArgumentTypeError("must not be empty")
+    return value
+
+
+def _read_optional_env_value(name: str) -> str | None:
+    value = os.environ.get(name)
+    return value if value else None
 
 
 def _resolve_password(host: str, user: str) -> str:
@@ -166,6 +213,89 @@ def _resolve_password(host: str, user: str) -> str:
     if password:
         return password
     return getpass.getpass(f"Password for {user}@{host}: ")
+
+
+def _parse_op_fields(payload: str) -> tuple[str, str]:
+    try:
+        raw_fields = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise CredentialError("invalid 1Password response") from exc
+    if not isinstance(raw_fields, list):
+        raise CredentialError("invalid 1Password response")
+
+    usernames = _op_values_for_label(raw_fields, "username")
+    passwords = _op_values_for_label(raw_fields, "password")
+    if len(usernames) != 1:
+        raise CredentialError("1Password item must include exactly one username field")
+    if len(passwords) != 1:
+        raise CredentialError("1Password item must include exactly one password field")
+
+    username = usernames[0]
+    password = passwords[0]
+    if username == "":
+        raise CredentialError("1Password item must include a non-empty username")
+    if password == "":
+        raise CredentialError("1Password item must include a non-empty password")
+    return username, password
+
+
+def _op_values_for_label(raw_fields: list[object], target_label: str) -> list[str]:
+    values: list[str] = []
+    for field in raw_fields:
+        if not isinstance(field, dict):
+            raise CredentialError("invalid 1Password response")
+        label = field.get("label")
+        value = field.get("value")
+        if not isinstance(label, str) or not isinstance(value, str):
+            raise CredentialError("invalid 1Password response")
+        if label == target_label:
+            values.append(value)
+    return values
+
+
+def _resolve_1password_credentials(
+    op_item: str, op_vault: str | None
+) -> tuple[str, str]:
+    command = [
+        "op",
+        "item",
+        "get",
+        "--fields",
+        "label=username,label=password",
+        "--format",
+        "json",
+        "--reveal",
+    ]
+    if op_vault:
+        command.extend(["--vault", op_vault])
+    command.extend(["--", op_item])
+    try:
+        result = subprocess.run(
+            args=command,
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            timeout=_OP_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as exc:
+        raise CredentialError("1Password CLI executable was not found") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise CredentialError("timed out while waiting for 1Password CLI") from exc
+    except OSError as exc:
+        raise CredentialError("unable to execute 1Password CLI") from exc
+
+    if result.returncode != 0:
+        raise CredentialError("failed to resolve credentials from 1Password item")
+    return _parse_op_fields(result.stdout)
+
+
+def _resolve_credentials(args: argparse.Namespace) -> tuple[str, str]:
+    op_item = getattr(args, "op_item", None)
+    op_vault = getattr(args, "op_vault", None)
+    if op_item is not None:
+        return _resolve_1password_credentials(op_item, op_vault)
+    return args.user, _resolve_password(args.host, args.user)
 
 
 def _status_to_dict(status: ModemStatus) -> dict[str, object]:
@@ -323,17 +453,19 @@ def _filter_by_severity(
     ]
 
 
-def _run_status(args: argparse.Namespace, password: str, palette: Palette) -> int:
+def _run_status(
+    args: argparse.Namespace, user: str, password: str, palette: Palette
+) -> int:
     if args.monitor:
         return _run_monitor_loop(
             lambda: _render_status_text(
-                get_status(args.host, args.user, password), args.host, palette
+                get_status(args.host, user, password), args.host, palette
             ),
             args.interval,
             sys.stdout,
         )
 
-    status = get_status(args.host, args.user, password)
+    status = get_status(args.host, user, password)
     if args.json:
         print(json.dumps(_status_to_dict(status), indent=2))
     else:
@@ -341,13 +473,15 @@ def _run_status(args: argparse.Namespace, password: str, palette: Palette) -> in
     return 0
 
 
-def _run_events(args: argparse.Namespace, password: str, palette: Palette) -> int:
+def _run_events(
+    args: argparse.Namespace, user: str, password: str, palette: Palette
+) -> int:
     if args.monitor:
         return _run_monitor_loop(
             lambda: _render_events_text(
                 _limit_events(
                     _filter_by_severity(
-                        get_event_log(args.host, args.user, password), args.min_severity
+                        get_event_log(args.host, user, password), args.min_severity
                     ),
                     args.limit,
                 ),
@@ -358,7 +492,7 @@ def _run_events(args: argparse.Namespace, password: str, palette: Palette) -> in
             sys.stdout,
         )
 
-    events = get_event_log(args.host, args.user, password)
+    events = get_event_log(args.host, user, password)
     events = _filter_by_severity(events, args.min_severity)
     events = _limit_events(events, args.limit)
     if args.json:
@@ -395,18 +529,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "--monitor cannot be combined with --json (JSON is single-shot only)"
         )
+    if getattr(args, "op_vault", None) and getattr(args, "op_item", None) is None:
+        parser.error("--op-vault requires --op-item")
 
     # JSON is machine-readable: never inject ANSI codes into it.
     force_off = args.no_color or args.json
     palette = palette_for(sys.stdout, force_off=force_off)
 
-    password = _resolve_password(args.host, args.user)
-
     try:
+        user, password = _resolve_credentials(args)
         if args.command == "events":
-            return _run_events(args, password, palette)
-        return _run_status(args, password, palette)
-    except ModemError as exc:
+            return _run_events(args, user, password, palette)
+        return _run_status(args, user, password, palette)
+    except (CredentialError, ModemError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
