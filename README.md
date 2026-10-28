@@ -23,11 +23,6 @@ The modem requires admin credentials. Supply the password through the
 accepted as a command-line argument, so it does not leak into shell history or
 the process list.
 
-You can also opt in to resolving both username and password from one
-1Password item via `op item get`. This requires the
-[1Password CLI](https://developer.1password.com/docs/cli/) (`op`) to be
-installed and signed in.
-
 ```sh
 # available subcommands and options (no modem connection)
 uv run netgear-cm500-cli
@@ -43,9 +38,6 @@ uv run netgear-cm500-cli gateway
 
 # voice/MTA status
 uv run netgear-cm500-cli voice
-
-# resolve credentials from a 1Password item (optional vault)
-uv run netgear-cm500-cli status --op-item cm500-admin --op-vault Home
 
 # full-screen monitor mode (refresh every 5 seconds by default)
 uv run netgear-cm500-cli status --monitor
@@ -85,14 +77,6 @@ A subcommand is required to fetch data. Without one, the tool displays help.
 | `--no-color` | color on an interactive terminal | `NO_COLOR` |
 | `--monitor` | one-shot fetch | — |
 | `--interval` | `5` seconds | — |
-| `--op-item` | disabled | `CM500_OP_ITEM` |
-| `--op-vault` | unset | `CM500_OP_VAULT` |
-
-When `--op-item`/`CM500_OP_ITEM` is set, credentials are resolved from that
-single 1Password item (`username` + `password` fields) and override
-`--user`/`CM500_USER` and `CM500_PASS` entirely. If 1Password resolution fails,
-the command exits with an error and does not fall back to environment or
-interactive password entry. `--op-vault` requires `--op-item`.
 
 Color is emitted only to an interactive terminal. It is suppressed for JSON,
 pipes, `--no-color`, and the [`NO_COLOR`](https://no-color.org) convention.
@@ -102,8 +86,39 @@ When redirected to a file/pipe, snapshots are appended without terminal
 control escape sequences and flushed after each refresh. Press `Ctrl-C` to
 stop monitor mode.
 
-Security note: the resolved password is captured only in-process memory from
-`op` stdout, with no temp files or credential logging.
+### Optional 1Password wrapper
+
+The utility itself has no 1Password integration. The standalone
+`scripts/cm500_1password.sh` Bash wrapper retrieves the `username` and `password`
+fields from a single item, then replaces itself with `netgear-cm500-cli`,
+passing credentials through `CM500_USER` and `CM500_PASS`.
+Requires Bash, `jq`, and the
+[1Password CLI](https://developer.1password.com/docs/cli/) (`op`) installed
+and signed in.
+
+Run from the repository root; `uv run` makes the project's CLI available:
+
+```sh
+uv run ./scripts/cm500_1password.sh --item cm500-admin --vault Home -- status
+uv run ./scripts/cm500_1password.sh --item cm500-admin -- events --json
+uv run ./scripts/cm500_1password.sh --item cm500-admin -- gateway --monitor
+```
+
+If `netgear-cm500-cli` is already on your `PATH`, omit `uv run` and execute
+`./scripts/cm500_1password.sh` directly.
+
+`--vault` is optional; omit it to let `op` find the item across accessible
+vaults. Use an item ID or specify a vault to disambiguate duplicate names.
+All arguments after `--` are passed to the utility
+unchanged; an explicit `--user` overrides the item's username. Item credentials
+replace existing `CM500_USER` and `CM500_PASS` values for the child process
+only. Lookup or validation failures stop execution without falling back to
+other credentials. Credentials are not placed in command-line arguments,
+printed, or written to temporary files, but are present in the child process
+environment and accessible to processes permitted to inspect it.
+
+The former `--op-item`, `--op-vault`, `CM500_OP_ITEM`, and `CM500_OP_VAULT`
+integration has been removed; use this wrapper instead.
 
 ## Development
 
