@@ -92,13 +92,35 @@ def _env_password(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CM500_PASS", "secret")
 
 
+@pytest.mark.parametrize("argv", [None, [], ["--json"], ["--host", "modem.local"]])
+def test_missing_subcommand_displays_help_without_credentials(
+    argv: list[str] | None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli.sys, "argv", ["netgear-cm500-cli"])
+
+    def unexpected_password_request(host: str, user: str) -> str:
+        pytest.fail("Help must not request credentials or connect to the modem")
+
+    monkeypatch.setattr(cli, "_resolve_password", unexpected_password_request)
+    assert cli.main(argv) == 0
+    captured = capsys.readouterr()
+    assert "usage:" in captured.out
+    assert "status" in captured.out
+    assert "events" in captured.out
+    assert "--host" in captured.out
+    assert "--json" in captured.out
+    assert captured.err == ""
+
+
 def test_text_output_includes_summary_and_tables(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     _env_password: None,
 ) -> None:
     monkeypatch.setattr(cli, "get_status", lambda *a, **k: _STATUS)
-    exit_code = cli.main(["--host", "192.168.100.1"])
+    exit_code = cli.main(["status", "--host", "192.168.100.1"])
     out = capsys.readouterr().out
     assert exit_code == 0
     assert "NETGEAR CM500 status @ 192.168.100.1" in out
@@ -114,7 +136,7 @@ def test_json_output_is_valid_and_structured(
     _env_password: None,
 ) -> None:
     monkeypatch.setattr(cli, "get_status", lambda *a, **k: _STATUS)
-    exit_code = cli.main(["--json"])
+    exit_code = cli.main(["status", "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert payload["general"]["connectivity_state"] == "OK"
@@ -131,7 +153,7 @@ def test_modem_error_reports_to_stderr_and_exits_nonzero(
         raise ModemError("authentication failed: check username and password")
 
     monkeypatch.setattr(cli, "get_status", _raise)
-    exit_code = cli.main([])
+    exit_code = cli.main(["status"])
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "authentication failed" in captured.err

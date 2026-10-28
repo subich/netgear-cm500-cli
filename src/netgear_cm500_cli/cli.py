@@ -10,8 +10,8 @@ events. Color is emitted only to an interactive terminal and is suppressed for
 JSON, pipes, ``--no-color``, or the ``NO_COLOR`` convention.
 
 Subcommands:
-    status  (default)  connection summary and downstream/upstream channel tables
-    events             most recent entries from the DOCSIS event log
+    status  connection summary and downstream/upstream channel tables
+    events  most recent entries from the DOCSIS event log
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     status_parser = subparsers.add_parser(
-        "status", help="connection summary and channel tables (default)"
+        "status", help="connection summary and channel tables"
     )
     _add_common_arguments(status_parser)
 
@@ -316,6 +316,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for the ``netgear-cm500-cli`` console script."""
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.command is None:
+        parser.print_help()
+        return 0
 
     # JSON is machine-readable: never inject ANSI codes into it.
     force_off = args.no_color or args.json

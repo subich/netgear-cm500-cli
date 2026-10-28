@@ -24,8 +24,11 @@ accepted as a command-line argument, so it does not leak into shell history or
 the process list.
 
 ```sh
-# connection summary and channel tables (default subcommand)
+# available subcommands and options (no modem connection)
 uv run netgear-cm500-cli
+
+# connection summary and channel tables
+uv run netgear-cm500-cli status
 
 # most recent event-log entries
 uv run netgear-cm500-cli events
@@ -36,7 +39,7 @@ uv run netgear-cm500-cli events --min-severity error --json
 
 ### Subcommands
 
-- `status` (default) — connection summary with downstream and upstream channel
+- `status` — connection summary with downstream and upstream channel
   tables.
 - `events` — most recent entries from the DOCSIS event log.
   - `-n, --limit N` — number of events to show (default: 20, `0` for all).
@@ -45,6 +48,8 @@ uv run netgear-cm500-cli events --min-severity error --json
     `information`, `debug`).
 
 ### Common options
+
+A subcommand is required to fetch data. Without one, the tool displays help.
 
 | Option | Default | Environment variable |
 | --- | --- | --- |
