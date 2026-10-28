@@ -13,6 +13,7 @@ the authenticated call.
 from __future__ import annotations
 
 import base64
+import html
 import re
 import urllib.error
 import urllib.request
@@ -25,12 +26,14 @@ DEFAULT_HOST = "192.168.100.1"
 DEFAULT_USER = "admin"
 _TIMEOUT_SECONDS = 15
 _HTTP_UNAUTHORIZED = 401
+_GATEWAY_REQUIRED_FIELDS = 17
+_VOICE_REQUIRED_FIELDS = 6
 
 # Matches the active (uncommented) assignment:
 #   var tagValueList = '...';
 # Commented example lines start with "//" and are skipped by the per-function
 # scan in _extract_tag_values, which keeps the last match inside the function.
-_ASSIGNMENT = re.compile(r"var tagValueList = '([^']*)'")
+_ASSIGNMENT = re.compile(r"""var tagValueList = (?:'([^']*)'|"([^"]*)")""")
 
 # The event log page embeds its rows as an XML document inside a JS string:
 #   var xmlFormat = '<docsDevEventTable>...</docsDevEventTable>';
@@ -158,6 +161,55 @@ class ModemStatus:
     upstream: list[UpstreamChannel]
 
 
+@dataclass(frozen=True)
+class GatewayStatus:
+    """Read-only gateway, LAN, and wireless details from the status page."""
+
+    hardware_version: str
+    firmware_version: str
+    serial_number: str
+    cm_certificate: str
+    cable_mac: str
+    cable_ip_mask: str
+    cable_gateway: str
+    cable_dns: str
+    network_access: str
+    internet_mac: str
+    internet_ip_mask: str
+    internet_dhcp: str
+    internet_gateway: str
+    internet_dns: str
+    lan_mac: str
+    lan_ip_mask: str
+    lan_dhcp: str
+    wireless_24_region: str
+    wireless_24_channel: str
+    wireless_24_mode: str
+    wireless_24_access_point: str
+    wireless_24_broadcast_name: str
+    wireless_24_isolation: str
+    wireless_5_region: str
+    wireless_5_channel: str
+    wireless_5_mode: str
+    wireless_5_access_point: str
+    wireless_5_broadcast_name: str
+    wireless_5_isolation: str
+    system_uptime: str
+    current_system_time: str
+
+
+@dataclass(frozen=True)
+class VoiceStatus:
+    """Read-only MTA line and provisioning details."""
+
+    line_1_status: str | None
+    line_2_status: str | None
+    mta_mac: str | None
+    mta_ip: str | None
+    mta_fqdn: str | None
+    telephony_signaling: str | None
+
+
 def _basic_auth_header(user: str, password: str) -> str:
     """Return the HTTP Basic ``Authorization`` header value for the credentials.
 
@@ -219,14 +271,29 @@ def fetch_event_log_page(
     return _fetch_page(host, user, password, "eventLog.htm", timeout=timeout)
 
 
-def _extract_tag_values(html: str, function_name: str) -> list[str]:
-    """Return the pipe-split values of the active tagValueList in a JS function.
+def fetch_gateway_status_page(
+    host: str, user: str, password: str, *, timeout: float = _TIMEOUT_SECONDS
+) -> str:
+    """Return the raw HTML of the read-only gateway status page."""
+    return _fetch_page(host, user, password, "RouterStatus.htm", timeout=timeout)
+
+
+def fetch_voice_status_page(
+    host: str, user: str, password: str, *, timeout: float = _TIMEOUT_SECONDS
+) -> str:
+    """Return the raw HTML of the read-only voice status page."""
+    return _fetch_page(host, user, password, "MtaStatus.htm", timeout=timeout)
+
+
+def _extract_tag_value_assignment(html: str, function_name: str) -> str | None:
+    """Return the active tagValueList string from a JavaScript function.
 
     Each target function defines several commented-out example lists followed by
-    the real one. This scans only within the named function body and keeps the
-    last non-commented assignment, matching the browser's behaviour.
+    the real one. This scans only within the named function body and ignores
+    both JavaScript line and block comments.
     """
     in_function = False
+    in_block_comment = False
     found: str | None = None
     func_marker = f"function {function_name}("
 
@@ -236,20 +303,29 @@ def _extract_tag_values(html: str, function_name: str) -> list[str]:
             in_function = True
         if not in_function:
             continue
+        if in_block_comment or stripped.startswith("/*"):
+            in_block_comment = "*/" not in line
+            continue
         if stripped.startswith("//"):
             continue  # commented-out example assignment
         match = _ASSIGNMENT.search(line)
         if match:
-            found = match.group(1)
-        if stripped == "}" and found is not None:
+            found = match.group(1) if match.group(1) is not None else match.group(2)
+        if stripped == "}":
             break
 
-    if found is None:
+    return found
+
+
+def _extract_tag_values(html: str, function_name: str) -> list[str]:
+    """Return the pipe-split values of the active tagValueList in a JS function."""
+    assignment = _extract_tag_value_assignment(html, function_name)
+    if assignment is None:
         return []
     # The page's lists carry a trailing empty field from the terminal "|";
     # drop it so channel counts line up.
-    parts = found.split("|")
-    if parts and parts[-1] == "":
+    parts = assignment.split("|")
+    if assignment.endswith("|"):
         parts.pop()
     return parts
 
@@ -366,6 +442,113 @@ def get_status(
     """Fetch and parse the modem status in one call."""
     html = fetch_status_page(host, user, password, timeout=timeout)
     return parse_status(html)
+
+
+def parse_gateway_status(html_text: str) -> GatewayStatus:
+    """Parse read-only gateway details from the router status page."""
+    values = _extract_tag_values(html_text, "InitTagValue")
+    if len(values) < _GATEWAY_REQUIRED_FIELDS:
+        raise ModemError(
+            "could not parse gateway status data from page (firmware layout may differ)"
+        )
+
+    def at(index: int) -> str:
+        if index >= len(values):
+            return ""
+        return html.unescape(values[index]).replace("\xa0", " ").strip()
+
+    return GatewayStatus(
+        hardware_version=at(0),
+        firmware_version=at(1),
+        serial_number=at(2),
+        cm_certificate=at(3),
+        cable_mac=at(4),
+        cable_ip_mask=at(5),
+        cable_gateway=at(6),
+        cable_dns=at(7),
+        network_access=at(8),
+        internet_mac=at(9),
+        internet_ip_mask=at(10),
+        internet_dhcp=at(11),
+        internet_gateway=at(12),
+        internet_dns=at(13),
+        lan_mac=at(14),
+        lan_ip_mask=at(15),
+        lan_dhcp=at(16),
+        wireless_24_region=at(18),
+        wireless_24_channel=at(19),
+        wireless_24_mode=at(20),
+        wireless_24_access_point=at(21),
+        wireless_24_broadcast_name=at(22),
+        wireless_24_isolation=at(23),
+        wireless_5_region=at(25),
+        wireless_5_channel=at(26),
+        wireless_5_mode=at(27),
+        wireless_5_access_point=at(28),
+        wireless_5_broadcast_name=at(29),
+        wireless_5_isolation=at(30),
+        system_uptime=at(35),
+        current_system_time=at(36),
+    )
+
+
+def get_gateway_status(
+    host: str = DEFAULT_HOST,
+    user: str = DEFAULT_USER,
+    password: str = "",
+    *,
+    timeout: float = _TIMEOUT_SECONDS,
+) -> GatewayStatus:
+    """Fetch and parse read-only gateway details in one call."""
+    page = fetch_gateway_status_page(host, user, password, timeout=timeout)
+    return parse_gateway_status(page)
+
+
+def parse_voice_status(html_text: str) -> VoiceStatus:
+    """Parse read-only MTA line and provisioning details."""
+    assignment = _extract_tag_value_assignment(html_text, "InitTagValue")
+    if assignment is None:
+        raise ModemError(
+            "could not parse voice status data from page (firmware layout may differ)"
+        )
+    values = _extract_tag_values(html_text, "InitTagValue")
+    if values == [""]:
+        return VoiceStatus(
+            line_1_status=None,
+            line_2_status=None,
+            mta_mac=None,
+            mta_ip=None,
+            mta_fqdn=None,
+            telephony_signaling=None,
+        )
+    if len(values) < _VOICE_REQUIRED_FIELDS:
+        raise ModemError(
+            "could not parse voice status data from page (firmware layout may differ)"
+        )
+
+    def at(index: int) -> str:
+        return html.unescape(values[index]).replace("\xa0", " ").strip()
+
+    return VoiceStatus(
+        line_1_status=at(0),
+        line_2_status=at(1),
+        mta_mac=at(2),
+        mta_ip=at(3),
+        mta_fqdn=at(4),
+        telephony_signaling=at(5),
+    )
+
+
+def get_voice_status(
+    host: str = DEFAULT_HOST,
+    user: str = DEFAULT_USER,
+    password: str = "",
+    *,
+    timeout: float = _TIMEOUT_SECONDS,
+) -> VoiceStatus:
+    """Fetch and parse read-only voice status in one call."""
+    page = fetch_voice_status_page(host, user, password, timeout=timeout)
+    return parse_voice_status(page)
 
 
 def _severity_name(level: str) -> str:

@@ -115,3 +115,93 @@ def test_get_status_uses_fetch_and_parse(monkeypatch: pytest.MonkeyPatch) -> Non
     status = modem.get_status("10.0.0.1", "admin", "secret")
     assert status.general.connectivity_state == "OK"
     assert len(status.downstream) == 2
+
+
+def test_parse_gateway_status_maps_router_fields() -> None:
+    values = [""] * 37
+    values[0:17] = [
+        "hardware",
+        "firmware",
+        "serial",
+        "installed",
+        "cable-mac",
+        "cable-ip/mask",
+        "cable-gateway",
+        "cable-dns",
+        "allowed",
+        "internet-mac",
+        "internet-ip/mask",
+        "DHCP",
+        "internet-gateway",
+        "internet-dns",
+        "lan-mac",
+        "lan-ip/mask",
+        "LAN DHCP",
+    ]
+    values[18:24] = ["region", "channel", "mode", "enabled", "ssid", "off"]
+    values[25:31] = ["region5", "channel5", "mode5", "enabled5", "ssid5", "off5"]
+    values[35:37] = ["uptime", "current-time"]
+    page = (
+        "<script>function InitTagValue(){\n"
+        "/*\nvar tagValueList = 'commented|firmware|sample';\n*/\n"
+        f'var tagValueList = "{"|".join(values)}";'
+        "\nreturn tagValueList.split('|');\n}</script>"
+    )
+
+    status = modem.parse_gateway_status(page)
+
+    assert status.hardware_version == "hardware"
+    assert status.cable_mac == "cable-mac"
+    assert status.internet_gateway == "internet-gateway"
+    assert status.wireless_24_broadcast_name == "ssid"
+    assert status.wireless_5_channel == "channel5"
+    assert status.system_uptime == "uptime"
+
+
+def test_parse_gateway_status_decodes_entities_and_rejects_missing_data() -> None:
+    values = ["value"] * 17
+    values[4] = "A&amp;B"
+    page = (
+        "<script>function InitTagValue(){"
+        f"var tagValueList = '{'|'.join(values)}';"
+        "return tagValueList.split('|');}</script>"
+    )
+    assert modem.parse_gateway_status(page).cable_mac == "A&B"
+    with pytest.raises(ModemError, match="could not parse gateway status data"):
+        modem.parse_gateway_status("<html></html>")
+
+
+def test_parse_voice_status_maps_line_and_provisioning_fields() -> None:
+    page = (
+        "<script>function InitTagValue(){"
+        'var tagValueList = "Connected|Disconnected|mta-mac|mta-ip|mta-fqdn|SIP";'
+        "return tagValueList.split('|');}</script>"
+    )
+
+    status = modem.parse_voice_status(page)
+
+    assert status.line_1_status == "Connected"
+    assert status.line_2_status == "Disconnected"
+    assert status.mta_mac == "mta-mac"
+    assert status.mta_ip == "mta-ip"
+    assert status.mta_fqdn == "mta-fqdn"
+    assert status.telephony_signaling == "SIP"
+
+
+def test_parse_voice_status_rejects_missing_data() -> None:
+    with pytest.raises(ModemError, match="could not parse voice status data"):
+        modem.parse_voice_status("<html></html>")
+
+
+def test_parse_voice_status_accepts_empty_firmware_payload() -> None:
+    page = (
+        "<script>function InitTagValue(){"
+        "var tagValueList = '';"
+        "return tagValueList.split('|');}</script>"
+    )
+
+    status = modem.parse_voice_status(page)
+
+    assert status.line_1_status is None
+    assert status.line_2_status is None
+    assert status.mta_mac is None
