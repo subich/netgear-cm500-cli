@@ -20,9 +20,12 @@ import argparse
 import dataclasses
 import getpass
 import json
+import math
 import os
 import sys
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
+from typing import TextIO
 
 from netgear_cm500_cli.color import Palette, palette_for
 from netgear_cm500_cli.modem import (
@@ -42,6 +45,7 @@ _PASSWORD_ENV_VAR = "CM500_PASS"
 _HOST_ENV_VAR = "CM500_HOST"
 _USER_ENV_VAR = "CM500_USER"
 _DEFAULT_EVENT_LIMIT = 20
+_DEFAULT_MONITOR_INTERVAL = 5.0
 
 # Downstream signal spec limits (dBmV / dB). Values outside these are typical
 # fault indicators and get highlighted; see the CableLabs DOCSIS guidance.
@@ -97,6 +101,18 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _monitor_interval(value: str) -> float:
+    try:
+        interval = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "must be a finite number greater than 0"
+        ) from exc
+    if not math.isfinite(interval) or interval <= 0:
+        raise argparse.ArgumentTypeError("must be a finite number greater than 0")
+    return interval
+
+
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     """Attach the shared connection flags to a parser or subparser.
 
@@ -122,6 +138,21 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--no-color",
         action="store_true",
         help="disable colored output (also honors the NO_COLOR convention)",
+    )
+    parser.add_argument(
+        "--monitor",
+        action="store_true",
+        help="poll continuously and refresh the full view each interval",
+    )
+    parser.add_argument(
+        "--interval",
+        type=_monitor_interval,
+        default=_DEFAULT_MONITOR_INTERVAL,
+        metavar="SECONDS",
+        help=(
+            "monitor polling interval in seconds "
+            f"(default: {_DEFAULT_MONITOR_INTERVAL:g})"
+        ),
     )
 
 
@@ -293,6 +324,15 @@ def _filter_by_severity(
 
 
 def _run_status(args: argparse.Namespace, password: str, palette: Palette) -> int:
+    if args.monitor:
+        return _run_monitor_loop(
+            lambda: _render_status_text(
+                get_status(args.host, args.user, password), args.host, palette
+            ),
+            args.interval,
+            sys.stdout,
+        )
+
     status = get_status(args.host, args.user, password)
     if args.json:
         print(json.dumps(_status_to_dict(status), indent=2))
@@ -302,6 +342,22 @@ def _run_status(args: argparse.Namespace, password: str, palette: Palette) -> in
 
 
 def _run_events(args: argparse.Namespace, password: str, palette: Palette) -> int:
+    if args.monitor:
+        return _run_monitor_loop(
+            lambda: _render_events_text(
+                _limit_events(
+                    _filter_by_severity(
+                        get_event_log(args.host, args.user, password), args.min_severity
+                    ),
+                    args.limit,
+                ),
+                args.host,
+                palette,
+            ),
+            args.interval,
+            sys.stdout,
+        )
+
     events = get_event_log(args.host, args.user, password)
     events = _filter_by_severity(events, args.min_severity)
     events = _limit_events(events, args.limit)
@@ -312,6 +368,22 @@ def _run_events(args: argparse.Namespace, password: str, palette: Palette) -> in
     return 0
 
 
+def _run_monitor_loop(
+    poll_and_render: Callable[[], str], interval: float, output: TextIO
+) -> int:
+    try:
+        while True:
+            snapshot = poll_and_render()
+            if output.isatty():
+                output.write("\x1b[2J\x1b[H")
+            output.write(snapshot)
+            output.write("\n")
+            output.flush()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return 130
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for the ``netgear-cm500-cli`` console script."""
     parser = _build_parser()
@@ -319,6 +391,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return 0
+    if args.monitor and args.json:
+        parser.error(
+            "--monitor cannot be combined with --json (JSON is single-shot only)"
+        )
 
     # JSON is machine-readable: never inject ANSI codes into it.
     force_off = args.no_color or args.json

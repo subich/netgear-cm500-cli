@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+from collections.abc import Callable
 
 import pytest
 
@@ -336,3 +338,155 @@ def test_json_output_never_colorized(
     cli.main(["events", "--json"])
     out = capsys.readouterr().out
     assert "\033[" not in out
+
+
+def _interrupting_sleep(
+    interrupt_after: int, calls: list[float]
+) -> Callable[[float], None]:
+    def fake_sleep(seconds: float) -> None:
+        calls.append(seconds)
+        if len(calls) >= interrupt_after:
+            raise KeyboardInterrupt
+
+    return fake_sleep
+
+
+def test_status_monitor_repeats_with_default_interval_and_single_credential_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    resolve_calls = 0
+    status_calls = 0
+    sleep_calls: list[float] = []
+
+    def fake_resolve(_host: str, _user: str) -> str:
+        nonlocal resolve_calls
+        resolve_calls += 1
+        return "secret"
+
+    def fake_get_status(*_args: object, **_kwargs: object) -> ModemStatus:
+        nonlocal status_calls
+        status_calls += 1
+        return _STATUS
+
+    monkeypatch.setattr(cli, "_resolve_password", fake_resolve)
+    monkeypatch.setattr(cli, "get_status", fake_get_status)
+    monkeypatch.setattr(cli.time, "sleep", _interrupting_sleep(2, sleep_calls))
+
+    exit_code = cli.main(["status", "--monitor"])
+    out = capsys.readouterr().out
+    assert exit_code == 130
+    assert resolve_calls == 1
+    assert status_calls == 2
+    assert sleep_calls == [5.0, 5.0]
+    assert out.count("NETGEAR CM500 status @") == 2
+    assert "\x1b[2J\x1b[H" not in out
+    assert "\033[" not in out
+
+
+def test_events_monitor_repeats_with_custom_interval(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    event_calls = 0
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr(cli, "_resolve_password", lambda *_args: "secret")
+
+    def fake_get_events(*_args: object, **_kwargs: object) -> list[EventLogEntry]:
+        nonlocal event_calls
+        event_calls += 1
+        return _EVENTS
+
+    monkeypatch.setattr(cli, "get_event_log", fake_get_events)
+    monkeypatch.setattr(cli.time, "sleep", _interrupting_sleep(2, sleep_calls))
+
+    exit_code = cli.main(["events", "--monitor", "--interval", "2.5"])
+    out = capsys.readouterr().out
+    assert exit_code == 130
+    assert event_calls == 2
+    assert sleep_calls == [2.5, 2.5]
+    assert out.count("NETGEAR CM500 event log @") == 2
+
+
+def test_monitor_tty_refresh_writes_clear_and_home_per_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _TtyBuffer(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    output = _TtyBuffer()
+    monkeypatch.setattr(cli, "get_status", lambda *a, **k: _STATUS)
+    monkeypatch.setattr(cli, "_resolve_password", lambda *_args: "secret")
+    monkeypatch.setattr(cli.sys, "stdout", output)
+    monkeypatch.setattr(cli.time, "sleep", _interrupting_sleep(1, []))
+
+    exit_code = cli.main(["status", "--monitor", "--no-color"])
+    text = output.getvalue()
+    assert exit_code == 130
+    assert text.startswith("\x1b[2J\x1b[H=== NETGEAR CM500 status @")
+
+
+def test_monitor_ctrl_c_during_fetch_exits_130(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "_resolve_password", lambda *_args: "secret")
+    monkeypatch.setattr(
+        cli,
+        "get_event_log",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt),
+    )
+    exit_code = cli.main(["events", "--monitor"])
+    captured = capsys.readouterr()
+    assert exit_code == 130
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_monitor_modem_error_exits_1_and_stops_polling(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = 0
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(cli, "_resolve_password", lambda *_args: "secret")
+
+    def fake_get_status(*_args: object, **_kwargs: object) -> ModemStatus:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ModemError("boom")
+        return _STATUS
+
+    monkeypatch.setattr(cli, "get_status", fake_get_status)
+    monkeypatch.setattr(cli.time, "sleep", _interrupting_sleep(99, sleep_calls))
+    exit_code = cli.main(["status", "--monitor"])
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert calls == 2
+    assert sleep_calls == [5.0]
+    assert "error: boom" in captured.err
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
+def test_monitor_interval_must_be_positive_finite(
+    value: str, _env_password: None
+) -> None:
+    with pytest.raises(SystemExit):
+        cli.main(["status", "--monitor", "--interval", value])
+
+
+def test_monitor_rejects_json_before_credentials_or_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_resolve_password",
+        lambda *_args: pytest.fail("credentials must not be resolved"),
+    )
+    monkeypatch.setattr(
+        cli, "get_status", lambda *_args, **_kwargs: pytest.fail("network must not run")
+    )
+    with pytest.raises(SystemExit):
+        cli.main(["status", "--monitor", "--json"])
